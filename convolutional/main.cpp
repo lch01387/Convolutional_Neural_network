@@ -1,13 +1,5 @@
 // Convolutional neural network
-
-// 개선점1 : 불필요한 반복
-// 개선점2 : 가중치 배열 순서바꾸기
-// output layer에 sigmoid 썼는지 확인하기
-
-// error를 그냥 맨뒷쪽에 몰아놓으면 되기때문에..
-
-// memory waste: weight[0][0][0~3][5][5]
-//              c_layer[0][0][~][~]
+// Lee chang Hyun
 
 #include <iostream>
 #include <fstream>
