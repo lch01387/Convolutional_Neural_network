@@ -4,6 +4,8 @@
 // 개선점2 : 가중치 배열 순서바꾸기
 // output layer에 sigmoid 썼는지 확인하기
 
+// error를 그냥 맨뒷쪽에 몰아놓으면 되기때문에..
+
 // memory waste: weight[0][0][0~3][5][5]
 //              c_layer[0][0][~][~]
 
@@ -11,12 +13,15 @@
 #include <fstream>
 #include <math.h>
 #include <time.h>
+#include <random> 
+#include <omp.h>
 
 #define W_SIZE 5 // subsampling model size
 #define HIDDEN 3 // number of(input layer + hidden layer)
 #define FN 1, 4, 8 // number of FeatureMap of input layer + hidden layer.
 #define OUTPUT 10 // output layer
 #define PULL_NUM 2 // max pulling number
+#define BATCH_SIZE 1 // size of mini batch
 
 using namespace std;
 
@@ -25,6 +30,7 @@ void set_mnist();
 void read_train();
 void check_mnist();
 void forwardprop();
+void errorprop();
 void backprop();
 void read_test();
 void close_train();
@@ -33,16 +39,13 @@ void open_train();
 
 int reverseInt (int i);
 
-int* c_num; // number of FeatureMaps
-int* c_size; // size of FeatureMap's row&col // c_size[0] = {FN}
-// c_size[0] = n_rows - w_size + 1  // c_size[1] : (c_size[0]/2) - wsize + 1
-float** i_layer; // input[n_rows][n_cols] // input layer
-float**** c_layer; // c_layer[0][FN[HIDDEN-1]][c_size][c_size] // subsampled layer
-float**** m_layer; // m_layer[0][FN[HIDDEN-1]][c_size/2][c_size/2] // max layer
-float* f_layer; // f_layer[c_size[Hidden-1] * c_size[Hidden-1] * Fn[Hidden-1]] // fully connected layer
-//float**** weight; // weight[HIDDEN][c_num][W_SIZE][W_SIZE]
+int c_num[HIDDEN] = {FN};  // number of FeatureMaps
+int* c_size; // size of FeatureMap's row&col
+float** i_layer; // input layer
+float**** c_layer; // subsampled layer
+float**** m_layer; // max layer
+float* f_layer; // fully connected layer
 float***** weight;
-// => weight[HIDDEN][back c_num][next c_num][W_SIZE][W_SIZE]
 float** f_weight; // f_weight // fully-connected layer weight
 float o_layer[OUTPUT]; // output layer
 float targets[OUTPUT];
@@ -62,7 +65,7 @@ int number_of_images1;
 int target;
 int f_size; // size of fully connected layer
 
-static float rate = 0.005; // learning rate
+static float rate = 0.15; // learning rate
 // rate 0.01 -> 85.94%
 // rate 0.05 -> 91.21% x2  -> 93.18% x10-> 96.05%
 // rate 0.10 -> 93.60% x10 -> 96.32%
@@ -81,20 +84,26 @@ ifstream file_train_label;
 ifstream file_test_images;
 ifstream file_test_label;
 
+
 int main(){
     time_t current_time;
     open_train();
     set_mnist();
     close_train();
     setweight(); // randomly set weight(weight, f_weight)
-    for(int k=0; k<10; k++){
+    for(int k=0; k<1; k++){
         cout << k+1 << "st" << endl;
         open_train();
-        for(int r=0; r<number_of_images; r++){
+        for(int r=0; r<number_of_images/BATCH_SIZE; r++){
             if(r%1000 == 0)
-                cout << "진행도: " << float(r)/700 << "%" << endl;
-            read_train(); // read once, i_layer is changed to new one
-            forwardprop();
+                cout << "progress: " << float(r)/700 << "%" << endl;
+
+            #pragma omp parallel for num_threads(BATCH_SIZE)
+            for(int m=0; m<BATCH_SIZE; m++){
+                read_train(); // read once, i_layer is changed to new one
+                forwardprop();
+                errorprop();
+            }
             backprop();
         }
         close_train();
@@ -108,7 +117,6 @@ int main(){
 
 void set_mnist(){
     // 초기설정
-    c_num = new int[HIDDEN]{FN};
 
     c_size = new int[HIDDEN];
 
@@ -124,13 +132,11 @@ void set_mnist(){
             }
         }
     }
-    // 바뀐 weight
 
     c_size[0] = n_rows; // input layer
     c_size[1] = c_size[0] - W_SIZE + 1;
     for(int i=2; i<HIDDEN; i++)
         c_size[i] = (c_size[i-1] / PULL_NUM) - W_SIZE + 1;
-    // init
 
     i_layer = new float*[n_rows];
     for(int i=0; i<n_rows; i++)
@@ -148,7 +154,6 @@ void set_mnist(){
                 c_layer[i][j][k] = new float[c_size[i]];
                 c_error[i][j][k] = new float[c_size[i]];
             }
-
         }
     }
 
@@ -168,7 +173,6 @@ void set_mnist(){
     }
 
     f_size = c_size[HIDDEN-1]/PULL_NUM * c_size[HIDDEN-1]/PULL_NUM * c_num[HIDDEN-1];
-    // fully connected
 
     f_weight = new float*[OUTPUT];
     for(int i=0; i<OUTPUT; i++)
@@ -182,25 +186,19 @@ void set_mnist(){
 
 void read_train()
 {
-    if (file_train_images.is_open())
-    {
+    if (file_train_images.is_open()){
         for(int r=0;r<n_rows;++r){
             for(int c=0;c<n_cols;++c){
                 unsigned char temp=0;
                 file_train_images.read((char*)&temp,sizeof(temp));
                 i_layer[r][c] = float(temp)/128-1;
-                //i_layer[r][c] = float(temp);
-                //printf("%3d ", temp);
             }
-            //cout << endl;
         }
-        //cout << endl;
     }
     if (file_train_label.is_open()){
         unsigned char temp=0;
         file_train_label.read((char*)&temp,sizeof(temp));
         target = temp;
-        //printf("target: d\n", target);
     }
     // set target matrix
     for(int o=0; o<OUTPUT; o++){
@@ -224,12 +222,8 @@ void forwardprop(){
                             for(int wr=0; wr<W_SIZE; wr++) // row of weight
                                 for(int wc=0; wc<W_SIZE; wc++){ // col of weight
                                     tempsum += i_layer[fr+wr][fc+wc] * weight[h][fb][fn][wr][wc];
-                                    //printf("h: %d fb:%d fn:%d wr:%d wc:%d -> ", h, fb, fn, wr, wc);
-                                    //printf("%f\n", weight[h][fb][fn][wr][wc]);
-                                    //printf("tempsum = %f\n", tempsum);
                                 }
                         c_layer[h+1][fn][fr][fc] = 1/(1+exp(-tempsum));
-                        //printf("h+1: %d fn: %d fr: %d fc: %d => %f\n", h+1, fn, fr, fc, c_layer[h+1][fn][fr][fc]);
                     }
         }else if(h == HIDDEN-1){
             // convolutional layer -> fully connected layer
@@ -238,7 +232,6 @@ void forwardprop(){
                 for(int r=0; r<c_size[h]/PULL_NUM; r++) // row of last max-pooling layer
                     for(int c=0; c<c_size[h]/PULL_NUM; c++){ // col of last max-pooling layer
                         f_layer[index] = m_layer[h][fn][r][c];
-                        //printf("f_layer: %f\n", f_layer[index]);
                         index++;
                     }
             continue;
@@ -252,7 +245,6 @@ void forwardprop(){
                             for(int wr=0; wr<W_SIZE; wr++)
                                 for(int wc=0; wc<W_SIZE; wc++)
                                     tempsum += m_layer[h][fb][fr+wr][fc+wc] * weight[h][fb][fn][wr][wc];
-                            //printf("h+1: %d fn: %d fr: %d fc: %d -> %f\n", h+1, fn, fr, fc, c_layer[h+1][fn][fr][fc]);
                         }
                         c_layer[h+1][fn][fr][fc] = 1/(1+exp(-tempsum));
                     }
@@ -264,16 +256,10 @@ void forwardprop(){
                     float tempmax=-1; // -1 is minimum result of sigmoid func
                     for(int r=0; r<PULL_NUM; r++) // max-pooling size = 2
                         for(int c=0; c<PULL_NUM; c++){
-                            if(h==0){
-                                //printf("c_layer %f\n", c_layer[h+1][f][mr*PULL_NUM+r][mc*PULL_NUM+c]);
-                            }
                             if(c_layer[h+1][f][mr*PULL_NUM+r][mc*PULL_NUM+c]>tempmax)
                                 tempmax = c_layer[h+1][f][mr*PULL_NUM+r][mc*PULL_NUM+c];
                         }
                     m_layer[h+1][f][mr][mc] = tempmax;
-                    //if(h==0)
-                    //printf("h+1: %d f: %d mr: %d mc: %d -> %f\n", h+1, f, mr, mc, tempmax);
-                    //printf("tempmax: %f\n", tempmax);
                 }
         }
     }
@@ -284,8 +270,6 @@ void forwardprop(){
             tempsum += f_weight[i][j]*f_layer[j];
         o_layer[i] = 1/(1+exp(-tempsum));
     }
-
-
     // calculate result
     int result = 0;
     float temp = -1;
@@ -294,20 +278,6 @@ void forwardprop(){
             result= i;
             temp = o_layer[i];
         }
-
-    // print
-    //    for(int i=0; i<OUTPUT; i++){
-    //        cout << i << " : " << o_layer[i] << endl;
-    //    }
-    //    cout << "result : " << result << endl;
-    //    cout << "target : " << target << endl;
-    //    if(result == target)
-    //        cout << "hit" << endl << endl;
-    //    else
-    //        cout << "miss" << endl << endl;;
-
-
-    // this image represent the number 'result'
 }
 
 void setweight(){ // randomly set weight
@@ -324,8 +294,6 @@ void setweight(){ // randomly set weight
                     for(int wc=0; wc<W_SIZE; wc++){
                         randn = rand();
                         weight[h][fb][fn][wr][wc] = (randn%1000-500) * 0.001;
-                        //cout << "weight: ";
-                        //printf("%f\n", weight[h][fb][fn][wr][wc]);
                     }
 
     // f_weight
@@ -336,24 +304,17 @@ void setweight(){ // randomly set weight
         }
 }
 
-void backprop(){
+void errorprop(){
     // output layer -> fully connected layer
-    // E∂w=∑x∑yEhl+1(x,y)hl(x,y)
     for(int o=0; o<OUTPUT; o++)
         o_error[o] = (o_layer[o]-targets[o])*o_layer[o]*(1-o_layer[o]);
-    // total error/output layer net
-
-    for(int f=0; f<f_size; f++)
-        f_error[f] = 0;
+    
+    // error of fully connected layer
     for(int o=0; o<OUTPUT; o++){
         for(int f=0; f<f_size; f++){
-            // error of fully connected layer
             f_error[f] += o_error[o]*f_weight[o][f] * (1-f_layer[f])*f_layer[f];
-            // update fully connected layer weight
-            f_weight[o][f] = f_weight[o][f] - rate*(o_error[o]*f_layer[f]);
         }
     }
-
     // error of last max-pooling layer
     int index = 0;
     for(int fn=0; fn<c_num[HIDDEN-1]; fn++)
@@ -362,37 +323,60 @@ void backprop(){
                 m_error[HIDDEN-1][fn][r][c] = f_error[index];
                 index++;
             }
-
+    
+    
     for(int h=HIDDEN-1; h>1; h--){
         // max pooling layer -> convolution layer
-        for(int f=0; f<c_num[h]; f++){
+        for(int f=0; f<c_num[h]; f++)
             for(int mr=0; mr<c_size[h]/PULL_NUM; mr++) // row of max-pooling layer
                 for(int mc=0; mc<c_size[h]/PULL_NUM; mc++) // col of max-pooling layer
                     for(int r=0; r<PULL_NUM; r++) // max-pooling size = 2
                         for(int c=0; c<PULL_NUM; c++)
                             c_error[h][f][mr*PULL_NUM+r][mc*PULL_NUM+c] = m_error[h][f][mr][mc];
-        }
-        // colvolution layer -> previous max pooling layer
-        for(int fb=0; fb<c_num[h-1]; fb++)
-            for(int fr=0; fr<c_size[h-1]/PULL_NUM; fr++)
-                for(int fc=0; fc<c_size[h-1]/PULL_NUM; fc++)
-                    m_error[h-1][fb][fr][fc] = 0;
-
+        
+        // error of previous max-pooling layer
         for(int fn=0; fn<c_num[h]; fn++) // next c_num
             for(int fr=0; fr<c_size[h]; fr++) // row of next convolutional layer
                 for(int fc=0; fc<c_size[h]; fc++) // col of next convolutional layer
                     for(int fb=0; fb<c_num[h-1]; fb++){ // back c_num
                         for(int wr=0; wr<W_SIZE; wr++)
                             for(int wc=0; wc<W_SIZE; wc++){
-                                // error of previous max-pooling layer
                                 m_error[h-1][fb][fr+wr][fc+wc] += c_error[h][fn][fr][fc] * weight[h-1][fb][fn][wr][wc] * m_layer[h-1][fb][fr+wr][fc+wc]*(1 - m_layer[h-1][fb][fr+wr][fc+wc]);
+                            }
+                    }
+    }
+}
+
+void backprop(){
+    // output layer -> fully connected layer
+    for(int o=0; o<OUTPUT; o++){
+        for(int f=0; f<f_size; f++){
+            // update fully connected layer weight
+            f_weight[o][f] = f_weight[o][f] - rate*(o_error[o]*f_layer[f]);
+        }
+    }
+    for(int f=0; f<f_size; f++)
+        f_error[f] = 0;
+    for(int h=HIDDEN-1; h>1; h--){
+        // colvolution layer -> previous max pooling layer
+        for(int fn=0; fn<c_num[h]; fn++) // next c_num
+            for(int fr=0; fr<c_size[h]; fr++) // row of next convolutional layer
+                for(int fc=0; fc<c_size[h]; fc++) // col of next convolutional layer
+                    for(int fb=0; fb<c_num[h-1]; fb++){ // back c_num
+                        for(int wr=0; wr<W_SIZE; wr++)
+                            for(int wc=0; wc<W_SIZE; wc++){
                                 // update convolutional layer weight
                                 weight[h-1][fb][fn][wr][wc] = weight[h-1][fb][fn][wr][wc] - rate*(c_error[h][fn][fr][fc] * m_layer[h-1][fb][fr+wr][fc+wc]);
                             }
                     }
+        for(int fb=0; fb<c_num[h-1]; fb++)
+            for(int fr=0; fr<c_size[h-1]/PULL_NUM; fr++)
+                for(int fc=0; fc<c_size[h-1]/PULL_NUM; fc++)
+                    m_error[h-1][fb][fr][fc] = 0;
     }
+    
+    // convolution layer -> input layer
     if(HIDDEN > 1){
-        // convolution layer -> input layer
         for(int fn=0; fn<c_num[1]; fn++) // next c_num
             for(int fr=0; fr<c_size[1]; fr++) // row of next convolutional layer
                 for(int fc=0; fc<c_size[1]; fc++) // col of next convolutional layer
@@ -474,18 +458,13 @@ void read_test(){
                     unsigned char temp=0;
                     file_test_images.read((char*)&temp,sizeof(temp));
                     i_layer[r][c] = float(temp)/128-1;
-                    //i_layer[r][c] = float(temp);
-                    //printf("%3d ", temp);
                 }
-                //cout << endl;
             }
-            //cout << endl;
         }
         if (file_test_label.is_open()){
             unsigned char temp=0;
             file_test_label.read((char*)&temp,sizeof(temp));
             target = temp;
-            //printf("target: %d\n", target);
         }
         // set target matrix
         for(int o=0; o<OUTPUT; o++){
@@ -496,7 +475,7 @@ void read_test(){
         }
 
         if(r%1000 == 0)
-            cout << "진행도: " << float(r+60000)/700 << "%" << endl;
+            cout << "progress: " << float(r+60000)/700 << "%" << endl;
         for(int h=0; h<HIDDEN; h++){
             // subsampling
             if(h==0){
@@ -509,12 +488,8 @@ void read_test(){
                                 for(int wr=0; wr<W_SIZE; wr++) // row of weight
                                     for(int wc=0; wc<W_SIZE; wc++){ // col of weight
                                         tempsum += i_layer[fr+wr][fc+wc] * weight[h][fb][fn][wr][wc];
-                                        //printf("h: %d fb:%d fn:%d wr:%d wc:%d -> ", h, fb, fn, wr, wc);
-                                        //printf("%f\n", weight[h][fb][fn][wr][wc]);
-                                        //printf("tempsum = %f\n", tempsum);
                                     }
                             c_layer[h+1][fn][fr][fc] = 1/(1+exp(-tempsum));
-                            //printf("h+1: %d fn: %d fr: %d fc: %d => %f\n", h+1, fn, fr, fc, c_layer[h+1][fn][fr][fc]);
                         }
             }else if(h == HIDDEN-1){
                 // convolutional layer -> fully connected layer
@@ -523,7 +498,6 @@ void read_test(){
                     for(int r=0; r<c_size[h]/PULL_NUM; r++) // row of last max-pooling layer
                         for(int c=0; c<c_size[h]/PULL_NUM; c++){ // col of last max-pooling layer
                             f_layer[index] = m_layer[h][fn][r][c];
-                            //printf("f_layer: %f\n", f_layer[index]);
                             index++;
                         }
                 continue;
@@ -537,7 +511,6 @@ void read_test(){
                                 for(int wr=0; wr<W_SIZE; wr++)
                                     for(int wc=0; wc<W_SIZE; wc++)
                                         tempsum += m_layer[h][fb][fr+wr][fc+wc] * weight[h][fb][fn][wr][wc];
-                                //printf("h+1: %d fn: %d fr: %d fc: %d -> %f\n", h+1, fn, fr, fc, c_layer[h+1][fn][fr][fc]);
                             }
                             c_layer[h+1][fn][fr][fc] = 1/(1+exp(-tempsum));
                         }
@@ -549,16 +522,10 @@ void read_test(){
                         float tempmax=-1; // -1 is minimum result of sigmoid func
                         for(int r=0; r<PULL_NUM; r++) // max-pooling size = 2
                             for(int c=0; c<PULL_NUM; c++){
-                                if(h==0){
-                                    //printf("c_layer %f\n", c_layer[h+1][f][mr*PULL_NUM+r][mc*PULL_NUM+c]);
-                                }
                                 if(c_layer[h+1][f][mr*PULL_NUM+r][mc*PULL_NUM+c]>tempmax)
                                     tempmax = c_layer[h+1][f][mr*PULL_NUM+r][mc*PULL_NUM+c];
                             }
                         m_layer[h+1][f][mr][mc] = tempmax;
-                        //if(h==0)
-                        //printf("h+1: %d f: %d mr: %d mc: %d -> %f\n", h+1, f, mr, mc, tempmax);
-                        //printf("tempmax: %f\n", tempmax);
                     }
             }
         }
@@ -570,7 +537,6 @@ void read_test(){
             o_layer[i] = 1/(1+exp(-tempsum));
         }
 
-
         // calculate result
         int result = 0;
         float temp = -1;
@@ -580,33 +546,7 @@ void read_test(){
                 temp = o_layer[i];
             }
         // this image represent the number 'result'
-
-        // print
-        //        for(int i=0; i<OUTPUT; i++){
-        //            cout << i << " : " << o_layer[i] << endl;
-        //        }
-        //        cout << "result : " << result << endl;
-        //        cout << "target : " << target << endl;
-        if(result == target){
-            //cout << "hit" << endl << endl;
+        if(result == target)
             hit++;
         }
-        //        else
-        //            cout << "miss" << endl << endl;
-    }
 }
-
-
-
-
-
-
-
-//샘플크기 : W_SIZE
-//몇장? : c_num[0,1,2]
-//0번째 hidden의 sub의 크기 : c_size[0]
-//i_layer[n_row][n_col]
-//c_layer[몇번쨰HIDDEN][몇번쨰hidden의 c_num][몇번째 hidden의 c_size][c_size]
-//m_layer[몇번째HIDDEN][몇번째hidden의 c_num][몇번째 hidden의 c_size][c_size]
-//f_layer[f_size]
-//float**** weight; // weight[HIDDEN][back c_num][next c_num][W_SIZE][W_SIZE]
