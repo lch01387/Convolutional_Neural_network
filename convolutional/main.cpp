@@ -13,7 +13,6 @@
 #define FN 1, 4, 8 // number of FeatureMap of input layer + hidden layer.
 #define OUTPUT 10 // output layer
 #define PULL_NUM 2 // max pulling number
-#define BATCH_SIZE 1 // size of mini batch
 
 using namespace std;
 
@@ -53,6 +52,7 @@ int magic_number;
 int number_of_images;
 int magic_number1;
 int number_of_images1;
+int batch_size;
 
 int target;
 int f_size; // size of fully connected layer
@@ -77,7 +77,9 @@ ifstream file_test_images;
 ifstream file_test_label;
 
 
-int main(){
+int main(int argc, char* argv[]){
+    batch_size = stoi(argv[1]);
+    rate = stof(argv[2]);
     time_t current_time;
     open_train();
     set_mnist();
@@ -86,12 +88,11 @@ int main(){
     for(int k=0; k<1; k++){
         cout << k+1 << "st" << endl;
         open_train();
-        for(int r=0; r<number_of_images/BATCH_SIZE; r++){
-            if(r%1000 == 0)
-                cout << "progress: " << float(r)/700 << "%" << endl;
-
-            #pragma omp parallel for num_threads(BATCH_SIZE)
-            for(int m=0; m<BATCH_SIZE; m++){
+        for(int r=0; r<number_of_images/batch_size; r++){
+            #pragma omp parallel for num_threads(batch_size)
+            for(int m=0; m<batch_size; m++){
+                if((r*batch_size+m)%1000 == 0)
+                    cout << "progress: " << float(r*batch_size+m)/700 << "%" << endl;
                 read_train(); // read once, i_layer is changed to new one
                 forwardprop();
                 errorprop();
@@ -382,8 +383,8 @@ void backprop(){
     }
 }
 void open_train(){
-    file_train_images.open("/Users/changhyeon/Desktop/3-1/UROP/machine/machine/train-images-idx3-ubyte");
-    file_train_label.open("/Users/changhyeon/Desktop/3-1/UROP/machine/machine/train-labels.idx1-ubyte");
+    file_train_images.open("./train-images-idx3-ubyte");
+    file_train_label.open("./train-labels.idx1-ubyte");
     if (file_train_images.is_open())
     {
         file_train_images.read((char*)&magic_number,sizeof(magic_number));
@@ -423,8 +424,8 @@ int reverseInt (int i)
 }
 
 void read_test(){
-    file_test_images.open("/Users/changhyeon/Desktop/3-1/UROP/machine/machine/t10k-images-idx3-ubyte");
-    file_test_label.open("/Users/changhyeon/Desktop/3-1/UROP/machine/machine/t10k-labels.idx1-ubyte");
+    file_test_images.open("./t10k-images-idx3-ubyte");
+    file_test_label.open("./t10k-labels.idx1-ubyte");
     if (file_test_images.is_open())
     {
         file_test_images.read((char*)&magic_number,sizeof(magic_number));
