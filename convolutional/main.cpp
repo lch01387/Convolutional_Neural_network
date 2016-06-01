@@ -1,6 +1,8 @@
 // Convolutional neural network
 // Lee chang Hyun
 
+// run [bach_size][learning_rate][epoch]
+
 #include <iostream>
 #include <fstream>
 #include <math.h>
@@ -16,46 +18,46 @@
 
 using namespace std;
 
-void setweight();
-void set_mnist();
-void read_train();
-void check_mnist();
-void forwardprop();
-void errorprop();
-void backprop();
-void read_test();
-void close_train();
-void close_test();
-void open_train();
-
-int reverseInt (int i);
+void setweight(); // randomly set weight(weight, f_weight)
+void set_mnist(); // dynamic allocation in
+void read_train(); // read file header
+void forwardprop(); // forward propagate
+void errorprop(); // error propagation
+void backprop(); // update weights
+void read_test(); // read test file header
+void close_train(); // close train file
+void open_train(); // read train file header
+void close_test(); // close test file
+int reverseInt (int i); // read header of input file
 
 int c_num[HIDDEN] = {FN};  // number of FeatureMaps
+int f_size; // size of fully connected layer
 int* c_size; // size of FeatureMap's row&col
 float** i_layer; // input layer
 float**** c_layer; // subsampled layer
-float**** m_layer; // max layer
+float**** m_layer; // max pooling layer
 float* f_layer; // fully connected layer
 float***** weight;
 float** f_weight; // f_weight // fully-connected layer weight
 float o_layer[OUTPUT]; // output layer
-float targets[OUTPUT];
+int target; // read mnist
+float targets[OUTPUT]; // target
 
 float o_error[OUTPUT];
 float* f_error;
 float**** c_error;
 float**** m_error;
 
-int n_rows;
+int n_rows; // size of input layer
 int n_cols; // size of input layer
+int batch_size; // size of input layer
+int epoch; // repeat time
+
+/* read header */
 int magic_number;
 int number_of_images;
 int magic_number1;
 int number_of_images1;
-int batch_size;
-
-int target;
-int f_size; // size of fully connected layer
 
 static float rate = 0.15; // learning rate
 // rate 0.01 -> 85.94%
@@ -78,22 +80,28 @@ ifstream file_test_label;
 
 
 int main(int argc, char* argv[]){
+    if(argc != 4){
+        printf("Usage : %s <bach_size> <learning_rate> <epoch>\n", argv[0]);
+        exit(1);
+    }
     batch_size = stoi(argv[1]);
     rate = stof(argv[2]);
+    epoch = stoi(argv[3]);
     time_t current_time;
     open_train();
     set_mnist();
     close_train();
-    setweight(); // randomly set weight(weight, f_weight)
-    for(int k=0; k<1; k++){
-        cout << k+1 << "st" << endl;
+    setweight();
+    for(int e=0; e<epoch; e++){
+        cout << e+1 << "st" << endl;
         open_train();
         for(int r=0; r<number_of_images/batch_size; r++){
+            
             #pragma omp parallel for num_threads(batch_size)
             for(int m=0; m<batch_size; m++){
                 if((r*batch_size+m)%1000 == 0)
                     cout << "progress: " << float(r*batch_size+m)/700 << "%" << endl;
-                read_train(); // read once, i_layer is changed to new one
+                read_train();
                 forwardprop();
                 errorprop();
             }
@@ -109,11 +117,9 @@ int main(int argc, char* argv[]){
 }
 
 void set_mnist(){
-    // 초기설정
-
     c_size = new int[HIDDEN];
-
     weight = new float****[HIDDEN-1];
+    
     for(int i=0; i<HIDDEN-1; i++){
         weight[i] = new float***[c_num[i]];
         for(int j=0; j<c_num[i]; j++){
@@ -125,7 +131,6 @@ void set_mnist(){
             }
         }
     }
-
     c_size[0] = n_rows; // input layer
     c_size[1] = c_size[0] - W_SIZE + 1;
     for(int i=2; i<HIDDEN; i++)
@@ -529,7 +534,6 @@ void read_test(){
                 tempsum += f_weight[i][j]*f_layer[j];
             o_layer[i] = 1/(1+exp(-tempsum));
         }
-
         // calculate result
         int result = 0;
         float temp = -1;
