@@ -1,4 +1,5 @@
 # Convolutional_Neural_network
+
 recognize handwrite digits
 use Mnist data(60,000 of train data & 10,000 of test data)
 >> http://yann.lecun.com/exdb/mnist/
