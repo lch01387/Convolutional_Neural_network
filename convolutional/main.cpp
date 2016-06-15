@@ -7,14 +7,16 @@
 #include <fstream>
 #include <math.h>
 #include <time.h>
-#include <random> 
+#include <random>
 #include <omp.h>
+#include <sys/time.h>
 
 #define W_SIZE 5 // subsampling model size
 #define HIDDEN 3 // number of(input layer + hidden layer)
-#define FN 1, 4, 8 // number of FeatureMap of input layer + hidden layer.
+#define FN 1, 2, 4 // number of FeatureMap of input layer + hidden layer.
 #define OUTPUT 10 // output layer
 #define PULL_NUM 2 // max pulling number
+#define BATCH_SIZE 200
 
 using namespace std;
 
@@ -80,6 +82,9 @@ ifstream file_test_label;
 
 
 int main(int argc, char* argv[]){
+    struct timeval start, end, result;
+    gettimeofday(&start, NULL);
+    
     if(argc != 4){
         printf("Usage : %s <bach_size> <learning_rate> <epoch>\n", argv[0]);
         exit(1);
@@ -87,20 +92,16 @@ int main(int argc, char* argv[]){
     batch_size = stoi(argv[1]);
     rate = stof(argv[2]);
     epoch = stoi(argv[3]);
-    time_t current_time;
     open_train();
     set_mnist();
     close_train();
     setweight();
     for(int e=0; e<epoch; e++){
-        cout << e+1 << "st" << endl;
+        cout << e+1 << "st learn" << endl;
         open_train();
-        for(int r=0; r<number_of_images/batch_size; r++){
-            
-            #pragma omp parallel for num_threads(batch_size)
-            for(int m=0; m<batch_size; m++){
-                if((r*batch_size+m)%1000 == 0)
-                    cout << "progress: " << float(r*batch_size+m)/700 << "%" << endl;
+        for(int r=0; r<number_of_images/BATCH_SIZE; r++){
+#pragma omp parallel for num_threads(batch_size)
+            for(int m=0; m<BATCH_SIZE; m++){
                 read_train();
                 forwardprop();
                 errorprop();
@@ -111,9 +112,11 @@ int main(int argc, char* argv[]){
     }
     read_test();
     close_test();
-    cout << "인식율 : " << float(hit)/100 << "%" << endl;
-    time( &current_time);
-    printf(ctime( &current_time));
+    cout << "recognition rate : " << float(hit)/100 << "%" << endl;
+    
+    gettimeofday(&end, NULL);
+    timersub(&end, &start, &result);
+    printf("%d.%d\n", result.tv_sec, result.tv_usec/0.01);
 }
 
 void set_mnist(){
@@ -135,17 +138,17 @@ void set_mnist(){
     c_size[1] = c_size[0] - W_SIZE + 1;
     for(int i=2; i<HIDDEN; i++)
         c_size[i] = (c_size[i-1] / PULL_NUM) - W_SIZE + 1;
-
+    
     i_layer = new float*[n_rows];
     for(int i=0; i<n_rows; i++)
         i_layer[i] = new float[n_cols];
-
     c_layer = new float***[HIDDEN];
     c_error = new float***[HIDDEN];
     for(int i=0; i<HIDDEN; i++){
         c_layer[i] = new float**[c_num[i]];
         c_error[i] = new float**[c_num[i]];
         for(int j=0; j<c_num[i]; j++){
+            
             c_layer[i][j] = new float*[c_size[i]];
             c_error[i][j] = new float*[c_size[i]];
             for(int k=0; k<c_size[i]; k++){
@@ -154,7 +157,7 @@ void set_mnist(){
             }
         }
     }
-
+    
     m_layer = new float***[HIDDEN];
     m_error = new float***[HIDDEN];
     for(int i=0; i<HIDDEN; i++){
@@ -169,16 +172,15 @@ void set_mnist(){
             }
         }
     }
-
+    
     f_size = c_size[HIDDEN-1]/PULL_NUM * c_size[HIDDEN-1]/PULL_NUM * c_num[HIDDEN-1];
-
+    
     f_weight = new float*[OUTPUT];
     for(int i=0; i<OUTPUT; i++)
         f_weight[i] = new float[f_size];
-
+    
     f_layer = new float[f_size];
     f_error = new float[f_size];
-
     close_train();
 }
 
@@ -283,7 +285,7 @@ void setweight(){ // randomly set weight
     time( &current_time);
     printf(ctime( &current_time));
     int randn;
-
+    
     // weight
     for(int h=0; h<HIDDEN-1; h++)
         for(int fb=0; fb<c_num[h]; fb++)
@@ -293,7 +295,7 @@ void setweight(){ // randomly set weight
                         randn = rand();
                         weight[h][fb][fn][wr][wc] = (randn%1000-500) * 0.001;
                     }
-
+    
     // f_weight
     for(int o=0; o<OUTPUT; o++)
         for(int fs=0; fs<f_size; fs++){
@@ -347,16 +349,20 @@ void errorprop(){
 
 void backprop(){
     // output layer -> fully connected layer
+#pragma omp for collapse(2)
     for(int o=0; o<OUTPUT; o++){
         for(int f=0; f<f_size; f++){
             // update fully connected layer weight
             f_weight[o][f] = f_weight[o][f] - rate*(o_error[o]*f_layer[f]);
         }
     }
+    
+    
     for(int f=0; f<f_size; f++)
         f_error[f] = 0;
     for(int h=HIDDEN-1; h>1; h--){
         // colvolution layer -> previous max pooling layer
+#pragma omp for collapse(5)
         for(int fn=0; fn<c_num[h]; fn++) // next c_num
             for(int fr=0; fr<c_size[h]; fr++) // row of next convolutional layer
                 for(int fc=0; fc<c_size[h]; fc++) // col of next convolutional layer
@@ -367,14 +373,18 @@ void backprop(){
                                 weight[h-1][fb][fn][wr][wc] = weight[h-1][fb][fn][wr][wc] - rate*(c_error[h][fn][fr][fc] * m_layer[h-1][fb][fr+wr][fc+wc]);
                             }
                     }
+#pragma omp for collapse(3)
         for(int fb=0; fb<c_num[h-1]; fb++)
             for(int fr=0; fr<c_size[h-1]/PULL_NUM; fr++)
                 for(int fc=0; fc<c_size[h-1]/PULL_NUM; fc++)
                     m_error[h-1][fb][fr][fc] = 0;
+        
     }
+    
     
     // convolution layer -> input layer
     if(HIDDEN > 1){
+#pragma omp for collapse(5)
         for(int fn=0; fn<c_num[1]; fn++) // next c_num
             for(int fr=0; fr<c_size[1]; fr++) // row of next convolutional layer
                 for(int fc=0; fc<c_size[1]; fc++) // col of next convolutional layer
@@ -385,6 +395,7 @@ void backprop(){
                                 weight[0][fb][fn][wr][wc] = weight[0][fb][fn][wr][wc] - rate*(c_error[1][fn][fr][fc] * i_layer[fr+wr][fc+wc]);
                             }
                     }
+        
     }
 }
 void open_train(){
@@ -400,7 +411,7 @@ void open_train(){
         n_rows= reverseInt(n_rows);
         file_train_images.read((char*)&n_cols,sizeof(n_cols));
         n_cols= reverseInt(n_cols);
-
+        
         file_train_label.read((char*)&magic_number1,sizeof(magic_number1));
         magic_number1= reverseInt(magic_number1);
         file_train_label.read((char*)&number_of_images1,sizeof(number_of_images1));
@@ -419,12 +430,12 @@ void close_test(){
 int reverseInt (int i)
 {
     unsigned char c1, c2, c3, c4;
-
+    
     c1 = i & 255;
     c2 = (i >> 8) & 255;
     c3 = (i >> 16) & 255;
     c4 = (i >> 24) & 255;
-
+    
     return ((int)c1 << 24) + ((int)c2 << 16) + ((int)c3 << 8) + c4;
 }
 
@@ -441,13 +452,12 @@ void read_test(){
         n_rows= reverseInt(n_rows);
         file_test_images.read((char*)&n_cols,sizeof(n_cols));
         n_cols= reverseInt(n_cols);
-
+        
         file_test_label.read((char*)&magic_number1,sizeof(magic_number1));
         magic_number1= reverseInt(magic_number1);
         file_test_label.read((char*)&number_of_images1,sizeof(number_of_images1));
         number_of_images1= reverseInt(number_of_images1);
     }
-
     for(int r=0; r<number_of_images; r++){
         if (file_test_images.is_open())
         {
@@ -471,9 +481,7 @@ void read_test(){
             else
                 targets[o] = 0;
         }
-
-        if(r%1000 == 0)
-            cout << "progress: " << float(r+60000)/700 << "%" << endl;
+        
         for(int h=0; h<HIDDEN; h++){
             // subsampling
             if(h==0){
@@ -545,5 +553,5 @@ void read_test(){
         // this image represent the number 'result'
         if(result == target)
             hit++;
-        }
+    }
 }
